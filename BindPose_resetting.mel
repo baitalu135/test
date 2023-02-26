@@ -1,0 +1,25 @@
+global proc deleteAllBindPoses() {
+    string $bindPoses[] = `ls -type "dagPose"`;
+    for ($pose in $bindPoses) {
+        catch(`delete $pose`);
+    }
+}
+
+
+global proc setNewBindPose() {
+    string $selectedObjs[] = `ls -sl -type "joint"`;
+
+
+    for ($obj in $selectedObjs) {
+        if (`attributeExists "bindPose" $obj`) {
+            deleteAllBindPoses();
+
+
+            select -r $obj;
+            dagPose -bp -save -n "bindPose1";
+        }
+    }
+}
+
+
+setNewBindPose();
