@@ -1,12 +1,9 @@
 import maya.cmds as cmds
 
-
 if cmds.unknownPlugin(q=True, list=True):
-    plugin_name = cmds.unknownPlugin(q=True, list=True)[0]
-    cmds.unknownPlugin(plugin_name, remove=True)
-    message = plugin_name + "ÇçÌèúÇµÇ‹ÇµÇΩ"
+    plugins = cmds.unknownPlugin(q=True, list=True)
+    for plugin in plugins:
+        cmds.unknownPlugin(plugin, remove=True)
+    cmds.confirmDialog(title='Unknown Plugin', message=str(len(plugins))+' deleted', button=['OK'], defaultButton='OK')
 else:
-    message = "unknownPluginÇÕÇ†ÇËÇ‹ÇπÇÒ"
-
-
-cmds.confirmDialog(title="Plugin Check", message=message, button=["OK"])
+    cmds.confirmDialog(title='Unknown Plugin', message='no unknownPlugin', button=['OK'], defaultButton='OK')
