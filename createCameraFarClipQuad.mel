@@ -1,0 +1,39 @@
+string $selCamXform[] = `ls -sl -type "transform"`;
+if (size($selCamXform) < 1) {
+    error "カメラの transform ノードを選択してください。";
+}
+string $camXformFix = $selCamXform[0];
+
+string $camShapesFix[] = `listRelatives -shapes $camXformFix`;
+if (size($camShapesFix) < 1) {
+    error "選択したノードにはカメラシェイプがありません。";
+}
+string $camShapeFix = $camShapesFix[0];
+
+float $camFarFix = `getAttr ($camShapeFix + ".farClipPlane")`;
+float $focalFix = `getAttr ($camShapeFix + ".focalLength")`;
+float $hAperFix = `getAttr ($camShapeFix + ".horizontalFilmAperture")`;
+float $vAperFix = `getAttr ($camShapeFix + ".verticalFilmAperture")`;
+
+float $inch2mmFix = 25.4;
+float $hAperMMFix = $hAperFix * $inch2mmFix;
+float $vAperMMFix = $vAperFix * $inch2mmFix;
+
+float $hFovRadFix = 2 * atan(($hAperMMFix / 2) / $focalFix);
+float $vFovRadFix = 2 * atan(($vAperMMFix / 2) / $focalFix);
+
+float $widthFix = 2 * $camFarFix * tan($hFovRadFix / 2);
+float $heightFix = 2 * $camFarFix * tan($vFovRadFix / 2);
+
+float $camMatrixFix[16] = `xform -q -ws -m $camXformFix`;
+
+vector $eyeFix = <<$camMatrixFix[12], $camMatrixFix[13], $camMatrixFix[14]>>;
+vector $forwardFix = <<-($camMatrixFix[8]), -($camMatrixFix[9]), -($camMatrixFix[10])>>; // Mayaでは-Z方向がforward
+vector $clipPosFix = $eyeFix + ($forwardFix * $camFarFix);
+
+string $meshFix[] = `polyPlane -w $widthFix -h $heightFix -sx 1 -sy 1 -ax 0 0 1 -cuv 2 -ch 0`;
+
+xform -ws -t ($clipPosFix.x) ($clipPosFix.y) ($clipPosFix.z) $meshFix[0];
+xform -ws -ro (`getAttr ($camXformFix + ".rotateX")`) (`getAttr ($camXformFix + ".rotateY")`) (`getAttr ($camXformFix + ".rotateZ")`) $meshFix[0];
+
+print "// カメラのファークリップ面に一致した角度・位置の四角メッシュが作成されました\n";
