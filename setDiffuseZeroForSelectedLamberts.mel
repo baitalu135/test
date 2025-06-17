@@ -1,0 +1,25 @@
+// 選択されたノードを取得
+string $selection[] = `ls -sl`;
+
+// 選択されたノードが存在するか確認
+if (size($selection) == 0) {
+    warning "ノードが選択されていません。";
+} else {
+    for ($node in $selection) {
+        // ノードのタイプを取得
+        string $type = `nodeType $node`;
+
+        // lambertノードか確認
+        if ($type == "lambert") {
+            // diffuse 属性が存在するか確認し、0に設定
+            if (`objExists ($node + ".diffuse")`) {
+                setAttr ($node + ".diffuse") 0;
+                print ($node + " の diffuse を 0 に設定しました。\n");
+            } else {
+                warning ($node + " に diffuse 属性が見つかりません。");
+            }
+        } else {
+            warning ($node + " は lambert ノードではありません。");
+        }
+    }
+}
