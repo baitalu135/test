@@ -1,26 +1,26 @@
-// ã‚·ãƒ¼ãƒ³å†…ã®å…¨ãƒ¡ãƒƒã‚·ãƒ¥ã‚·ã‚§ã‚¤ãƒ—ã‚’å–å¾—ï¼ˆä¸­é–“ã‚ªãƒ–ã‚¸ã‚§ã‚¯ãƒˆã‚’é™¤å¤–ï¼‰
+// ƒV[ƒ““à‚Ì‘SƒƒbƒVƒ…ƒVƒFƒCƒv‚ğæ“¾i’†ŠÔƒIƒuƒWƒFƒNƒg‚ğœŠOj
 string $meshes[] = `ls -type mesh -ni`;
 
 for ($mesh in $meshes) {
-    // å‚ç…§ãƒãƒ¼ãƒ‰ã¯ã‚¹ã‚­ãƒƒãƒ—
+    // QÆƒm[ƒh‚ÍƒXƒLƒbƒv
     if (`referenceQuery -isNodeReferenced $mesh`) {
         continue;
     }
 
-    // Use Global ã‚’ã‚ªãƒ•
+    // Use Global ‚ğƒIƒt
     if (`attributeQuery -n $mesh -ex "useGlobalSmoothDrawType"`) {
         setAttr ($mesh + ".useGlobalSmoothDrawType") 0;
     }
 
-    // Subdivision Method ã‚’ Catmull-Clark ã«è¨­å®š
+    // Subdivision Method ‚ğ Catmull-Clark ‚Éİ’è
     if (`attributeQuery -n $mesh -ex "smoothDrawType"`) {
         setAttr ($mesh + ".smoothDrawType") 0;
     }
 
-    // Propagate Edge Hardness ã‚’ã‚ªãƒ³
+    // Propagate Edge Hardness ‚ğƒIƒ“
     if (`attributeQuery -n $mesh -ex "propagateEdgeHardness"`) {
         setAttr ($mesh + ".propagateEdgeHardness") 1;
     }
 }
 
-print("å‡¦ç†å®Œäº†ï¼šå‚ç…§ãƒãƒ¼ãƒ‰ã‚’é™¤ãå…¨ãƒ¡ãƒƒã‚·ãƒ¥ã« Use Global ã‚ªãƒ•ã€Subdivision Method = Catmull-Clarkã€Propagate Edge Hardness = ã‚ªãƒ³ ã‚’é©ç”¨ã—ã¾ã—ãŸã€‚");
+print("ˆ—Š®—¹FQÆƒm[ƒh‚ğœ‚­‘SƒƒbƒVƒ…‚É Use Global ƒIƒtASubdivision Method = Catmull-ClarkAPropagate Edge Hardness = ƒIƒ“ ‚ğ“K—p‚µ‚Ü‚µ‚½B");
