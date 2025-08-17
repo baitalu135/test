@@ -1,0 +1,26 @@
+// シーン内の全メッシュシェイプを取得（中間オブジェクトを除外）
+string $meshes[] = `ls -type mesh -ni`;
+
+for ($mesh in $meshes) {
+    // 参照ノードはスキップ
+    if (`referenceQuery -isNodeReferenced $mesh`) {
+        continue;
+    }
+
+    // Use Global をオフ
+    if (`attributeQuery -n $mesh -ex "useGlobalSmoothDrawType"`) {
+        setAttr ($mesh + ".useGlobalSmoothDrawType") 0;
+    }
+
+    // Subdivision Method を Catmull-Clark に設定
+    if (`attributeQuery -n $mesh -ex "smoothDrawType"`) {
+        setAttr ($mesh + ".smoothDrawType") 0;
+    }
+
+    // Propagate Edge Hardness をオン
+    if (`attributeQuery -n $mesh -ex "propagateEdgeHardness"`) {
+        setAttr ($mesh + ".propagateEdgeHardness") 1;
+    }
+}
+
+print("処理完了：参照ノードを除く全メッシュに Use Global オフ、Subdivision Method = Catmull-Clark、Propagate Edge Hardness = オン を適用しました。");
