@@ -1,0 +1,1510 @@
+// mayaToolList.mel
+// A small tool list window for Maya MEL tools.
+// Current tool:
+//   - Transform Reset and Freeze
+//   - Center Pivot and Bake
+//   - Pivot Direction
+
+global proc int mtlCanSetAttr(string $attr)
+{
+    if (!`objExists $attr`) {
+        return 0;
+    }
+
+    if (`getAttr -lock $attr`) {
+        warning("Skipped locked attribute: " + $attr);
+        return 0;
+    }
+
+    if (!`getAttr -settable $attr`) {
+        warning("Skipped non-settable attribute: " + $attr);
+        return 0;
+    }
+
+    return 1;
+}
+
+global proc mtlSetAttr(string $node, string $attrName, float $value)
+{
+    string $attr = ($node + "." + $attrName);
+
+    if (`mtlCanSetAttr $attr`) {
+        setAttr $attr $value;
+    }
+}
+
+global proc mtlEnsurePivotDirectionAttrs(string $node)
+{
+    if (!`objExists ($node + ".mtlHasPivotDirection")`) {
+        addAttr -longName "mtlHasPivotDirection" -attributeType "bool" $node;
+    }
+
+    if (!`objExists ($node + ".mtlPivotDirectionX")`) {
+        addAttr -longName "mtlPivotDirectionX" -attributeType "double" -defaultValue 0 $node;
+    }
+
+    if (!`objExists ($node + ".mtlPivotDirectionY")`) {
+        addAttr -longName "mtlPivotDirectionY" -attributeType "double" -defaultValue 0 $node;
+    }
+
+    if (!`objExists ($node + ".mtlPivotDirectionZ")`) {
+        addAttr -longName "mtlPivotDirectionZ" -attributeType "double" -defaultValue 0 $node;
+    }
+
+    if (!`objExists ($node + ".mtlHasPivotFrame")`) {
+        addAttr -longName "mtlHasPivotFrame" -attributeType "bool" $node;
+    }
+
+    string $frameAttrs[];
+    $frameAttrs[0] = "mtlPivotBaseX";
+    $frameAttrs[1] = "mtlPivotBaseY";
+    $frameAttrs[2] = "mtlPivotBaseZ";
+    $frameAttrs[3] = "mtlPivotAxisXX";
+    $frameAttrs[4] = "mtlPivotAxisXY";
+    $frameAttrs[5] = "mtlPivotAxisXZ";
+    $frameAttrs[6] = "mtlPivotAxisYX";
+    $frameAttrs[7] = "mtlPivotAxisYY";
+    $frameAttrs[8] = "mtlPivotAxisYZ";
+    $frameAttrs[9] = "mtlPivotAxisZX";
+    $frameAttrs[10] = "mtlPivotAxisZY";
+    $frameAttrs[11] = "mtlPivotAxisZZ";
+    int $i;
+
+    for ($i = 0; $i < size($frameAttrs); $i++) {
+        string $attr = ($node + "." + $frameAttrs[$i]);
+
+        if (!`objExists $attr`) {
+            addAttr -longName $frameAttrs[$i] -attributeType "double" -defaultValue 0 $node;
+        }
+    }
+}
+
+global proc int mtlArrayHasItem(string $items[], string $item)
+{
+    int $count = size($items);
+    int $i;
+
+    for ($i = 0; $i < $count; $i++) {
+        if ($items[$i] == $item) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+global proc mtlResetOneTransform(string $node)
+{
+    mtlSetAttr $node "translateX" 0;
+    mtlSetAttr $node "translateY" 0;
+    mtlSetAttr $node "translateZ" 0;
+
+    mtlSetAttr $node "rotateX" 0;
+    mtlSetAttr $node "rotateY" 0;
+    mtlSetAttr $node "rotateZ" 0;
+
+    mtlSetAttr $node "scaleX" 1;
+    mtlSetAttr $node "scaleY" 1;
+    mtlSetAttr $node "scaleZ" 1;
+
+    mtlSetAttr $node "shearXY" 0;
+    mtlSetAttr $node "shearXZ" 0;
+    mtlSetAttr $node "shearYZ" 0;
+
+    mtlSetAttr $node "rotatePivotX" 0;
+    mtlSetAttr $node "rotatePivotY" 0;
+    mtlSetAttr $node "rotatePivotZ" 0;
+
+    mtlSetAttr $node "scalePivotX" 0;
+    mtlSetAttr $node "scalePivotY" 0;
+    mtlSetAttr $node "scalePivotZ" 0;
+
+    mtlSetAttr $node "rotatePivotTranslateX" 0;
+    mtlSetAttr $node "rotatePivotTranslateY" 0;
+    mtlSetAttr $node "rotatePivotTranslateZ" 0;
+
+    mtlSetAttr $node "scalePivotTranslateX" 0;
+    mtlSetAttr $node "scalePivotTranslateY" 0;
+    mtlSetAttr $node "scalePivotTranslateZ" 0;
+
+    if (`objExists ($node + ".mtlHasPivotDirection")`) {
+        setAttr ($node + ".mtlHasPivotDirection") 0;
+    }
+
+    if (`objExists ($node + ".mtlHasPivotFrame")`) {
+        setAttr ($node + ".mtlHasPivotFrame") 0;
+    }
+}
+
+global proc mtlResetSelectedTransform()
+{
+    string $selection[] = `ls -sl -long`;
+    string $targets[];
+    int $i;
+
+    for ($i = 0; $i < size($selection); $i++) {
+        string $node = $selection[$i];
+        string $target = "";
+
+        if (`nodeType $node` == "transform") {
+            $target = $node;
+        } else {
+            string $parents[] = `listRelatives -parent -fullPath $node`;
+
+            if (size($parents) > 0) {
+                if (`nodeType $parents[0]` == "transform") {
+                    $target = $parents[0];
+                }
+            }
+        }
+
+        if ($target != "") {
+            if (!`mtlArrayHasItem $targets $target`) {
+                $targets[size($targets)] = $target;
+            }
+        }
+    }
+
+    if (size($targets) == 0) {
+        warning("No transform nodes selected.");
+        return;
+    }
+
+    undoInfo -openChunk;
+
+    for ($i = 0; $i < size($targets); $i++) {
+        mtlResetOneTransform $targets[$i];
+    }
+
+    undoInfo -closeChunk;
+
+    print("Reset transform and pivots on " + size($targets) + " node(s).\n");
+}
+
+global proc mtlFreezeSelectedTransform()
+{
+    string $selection[] = `ls -sl -long`;
+    string $targets[];
+    int $i;
+
+    for ($i = 0; $i < size($selection); $i++) {
+        string $node = $selection[$i];
+        string $target = "";
+
+        if (`nodeType $node` == "transform") {
+            $target = $node;
+        } else {
+            string $parents[] = `listRelatives -parent -fullPath $node`;
+
+            if (size($parents) > 0) {
+                if (`nodeType $parents[0]` == "transform") {
+                    $target = $parents[0];
+                }
+            }
+        }
+
+        if ($target != "") {
+            if (!`mtlArrayHasItem $targets $target`) {
+                $targets[size($targets)] = $target;
+            }
+        }
+    }
+
+    if (size($targets) == 0) {
+        warning("No transform nodes selected.");
+        return;
+    }
+
+    undoInfo -openChunk;
+
+    for ($i = 0; $i < size($targets); $i++) {
+        makeIdentity
+            -apply true
+            -translate true
+            -rotate true
+            -scale true
+            -normal false
+            $targets[$i];
+    }
+
+    undoInfo -closeChunk;
+
+    print("Froze transform on " + size($targets) + " node(s).\n");
+}
+
+global proc mtlFreezeThenResetSelectedTransform()
+{
+    mtlFreezeSelectedTransform;
+    mtlResetSelectedTransform;
+}
+
+global proc mtlMoveShapePointsForPivotBake(string $node, float $offsetX, float $offsetY, float $offsetZ)
+{
+    string $shapes[] = `listRelatives -shapes -fullPath $node`;
+    float $moveX = (-1 * $offsetX);
+    float $moveY = (-1 * $offsetY);
+    float $moveZ = (-1 * $offsetZ);
+    int $i;
+
+    for ($i = 0; $i < size($shapes); $i++) {
+        string $shape = $shapes[$i];
+
+        if (`objExists ($shape + ".intermediateObject")`) {
+            if (`getAttr ($shape + ".intermediateObject")`) {
+                continue;
+            }
+        }
+
+        string $type = `nodeType $shape`;
+        string $component = "";
+
+        if ($type == "mesh") {
+            $component = ($shape + ".vtx[*]");
+        } else if ($type == "nurbsCurve") {
+            $component = ($shape + ".cv[*]");
+        } else if ($type == "nurbsSurface") {
+            $component = ($shape + ".cv[*][*]");
+        }
+
+        if ($component != "") {
+            move
+                -relative
+                -objectSpace
+                $moveX
+                $moveY
+                $moveZ
+                $component;
+        } else {
+            warning("Skipped unsupported shape type for pivot bake: " + $shape);
+        }
+    }
+}
+
+global proc mtlRotateShapePointsForPivotDirection(string $node, float $pivotX, float $pivotY, float $pivotZ, float $rotX, float $rotY, float $rotZ)
+{
+    string $shapes[] = `listRelatives -shapes -fullPath $node`;
+    int $i;
+
+    for ($i = 0; $i < size($shapes); $i++) {
+        string $shape = $shapes[$i];
+
+        if (`objExists ($shape + ".intermediateObject")`) {
+            if (`getAttr ($shape + ".intermediateObject")`) {
+                continue;
+            }
+        }
+
+        string $type = `nodeType $shape`;
+        string $component = "";
+
+        if ($type == "mesh") {
+            $component = ($shape + ".vtx[*]");
+        } else if ($type == "nurbsCurve") {
+            $component = ($shape + ".cv[*]");
+        } else if ($type == "nurbsSurface") {
+            $component = ($shape + ".cv[*][*]");
+        }
+
+        if ($component != "") {
+            rotate
+                -relative
+                -objectSpace
+                -pivot
+                $pivotX
+                $pivotY
+                $pivotZ
+                $rotX
+                $rotY
+                $rotZ
+                $component;
+        } else {
+            warning("Skipped unsupported shape type for pivot direction: " + $shape);
+        }
+    }
+}
+
+global proc mtlSetRotationKeepingShapeWorld(string $node, float $rotX, float $rotY, float $rotZ)
+{
+    string $components[];
+    float $positions[];
+    string $shapes[] = `listRelatives -shapes -fullPath $node`;
+    int $i;
+    int $j;
+
+    for ($i = 0; $i < size($shapes); $i++) {
+        string $shape = $shapes[$i];
+
+        if (`objExists ($shape + ".intermediateObject")`) {
+            if (`getAttr ($shape + ".intermediateObject")`) {
+                continue;
+            }
+        }
+
+        string $type = `nodeType $shape`;
+        string $pattern = "";
+
+        if ($type == "mesh") {
+            $pattern = ($shape + ".vtx[*]");
+        } else if ($type == "nurbsCurve") {
+            $pattern = ($shape + ".cv[*]");
+        } else if ($type == "nurbsSurface") {
+            $pattern = ($shape + ".cv[*][*]");
+        }
+
+        if ($pattern != "") {
+            string $expanded[] = `ls -flatten $pattern`;
+
+            for ($j = 0; $j < size($expanded); $j++) {
+                float $pos[] = `pointPosition -world $expanded[$j]`;
+                int $index = size($components);
+
+                $components[$index] = $expanded[$j];
+                int $positionIndex = size($positions);
+                $positions[$positionIndex] = $pos[0];
+                $positionIndex = size($positions);
+                $positions[$positionIndex] = $pos[1];
+                $positionIndex = size($positions);
+                $positions[$positionIndex] = $pos[2];
+            }
+        } else {
+            warning("Skipped unsupported shape type for rotation bake: " + $shape);
+        }
+    }
+
+    mtlSetAttr $node "rotateX" $rotX;
+    mtlSetAttr $node "rotateY" $rotY;
+    mtlSetAttr $node "rotateZ" $rotZ;
+
+    for ($i = 0; $i < size($components); $i++) {
+        int $posIndex = ($i * 3);
+        int $posIndexY = ($posIndex + 1);
+        int $posIndexZ = ($posIndex + 2);
+
+        xform
+            -worldSpace
+            -translation
+            $positions[$posIndex]
+            $positions[$posIndexY]
+            $positions[$posIndexZ]
+            $components[$i];
+    }
+}
+
+global proc mtlBakeOnePivotFrame(string $node)
+{
+    float $worldPivot[] = `xform -query -worldSpace -rotatePivot $node`;
+    float $pivotX = $worldPivot[0];
+    float $pivotY = $worldPivot[1];
+    float $pivotZ = $worldPivot[2];
+    float $xX = `getAttr ($node + ".mtlPivotAxisXX")`;
+    float $xY = `getAttr ($node + ".mtlPivotAxisXY")`;
+    float $xZ = `getAttr ($node + ".mtlPivotAxisXZ")`;
+    float $yX = `getAttr ($node + ".mtlPivotAxisYX")`;
+    float $yY = `getAttr ($node + ".mtlPivotAxisYY")`;
+    float $yZ = `getAttr ($node + ".mtlPivotAxisYZ")`;
+    float $zX = `getAttr ($node + ".mtlPivotAxisZX")`;
+    float $zY = `getAttr ($node + ".mtlPivotAxisZY")`;
+    float $zZ = `getAttr ($node + ".mtlPivotAxisZZ")`;
+    string $components[];
+    float $positions[];
+    string $shapes[] = `listRelatives -shapes -fullPath $node`;
+    int $i;
+    int $j;
+
+    for ($i = 0; $i < size($shapes); $i++) {
+        string $shape = $shapes[$i];
+
+        if (`objExists ($shape + ".intermediateObject")`) {
+            if (`getAttr ($shape + ".intermediateObject")`) {
+                continue;
+            }
+        }
+
+        string $type = `nodeType $shape`;
+        string $pattern = "";
+
+        if ($type == "mesh") {
+            $pattern = ($shape + ".vtx[*]");
+        } else if ($type == "nurbsCurve") {
+            $pattern = ($shape + ".cv[*]");
+        } else if ($type == "nurbsSurface") {
+            $pattern = ($shape + ".cv[*][*]");
+        }
+
+        if ($pattern != "") {
+            string $expanded[] = `ls -flatten $pattern`;
+
+            for ($j = 0; $j < size($expanded); $j++) {
+                float $pos[] = `pointPosition -world $expanded[$j]`;
+                int $index = size($components);
+                int $positionIndex = size($positions);
+
+                $components[$index] = $expanded[$j];
+                $positions[$positionIndex] = $pos[0];
+                $positionIndex = size($positions);
+                $positions[$positionIndex] = $pos[1];
+                $positionIndex = size($positions);
+                $positions[$positionIndex] = $pos[2];
+            }
+        } else {
+            warning("Skipped unsupported shape type for pivot frame bake: " + $shape);
+        }
+    }
+
+    xform
+        -worldSpace
+        -matrix
+        $xX $xY $xZ 0
+        $yX $yY $yZ 0
+        $zX $zY $zZ 0
+        $pivotX $pivotY $pivotZ 1
+        $node;
+
+    for ($i = 0; $i < size($components); $i++) {
+        int $posIndex = ($i * 3);
+        int $posIndexY = ($posIndex + 1);
+        int $posIndexZ = ($posIndex + 2);
+        float $relX = ($positions[$posIndex] - $pivotX);
+        float $relY = ($positions[$posIndexY] - $pivotY);
+        float $relZ = ($positions[$posIndexZ] - $pivotZ);
+        float $localX = (($relX * $xX) + ($relY * $xY) + ($relZ * $xZ));
+        float $localY = (($relX * $yX) + ($relY * $yY) + ($relZ * $yZ));
+        float $localZ = (($relX * $zX) + ($relY * $zY) + ($relZ * $zZ));
+
+        xform
+            -objectSpace
+            -translation
+            $localX
+            $localY
+            $localZ
+            $components[$i];
+    }
+
+    mtlSetAttr $node "rotatePivotX" 0;
+    mtlSetAttr $node "rotatePivotY" 0;
+    mtlSetAttr $node "rotatePivotZ" 0;
+
+    mtlSetAttr $node "scalePivotX" 0;
+    mtlSetAttr $node "scalePivotY" 0;
+    mtlSetAttr $node "scalePivotZ" 0;
+
+    mtlSetAttr $node "rotatePivotTranslateX" 0;
+    mtlSetAttr $node "rotatePivotTranslateY" 0;
+    mtlSetAttr $node "rotatePivotTranslateZ" 0;
+
+    mtlSetAttr $node "scalePivotTranslateX" 0;
+    mtlSetAttr $node "scalePivotTranslateY" 0;
+    mtlSetAttr $node "scalePivotTranslateZ" 0;
+
+    setAttr ($node + ".mtlHasPivotFrame") 0;
+    setAttr ($node + ".mtlHasPivotDirection") 0;
+}
+
+global proc mtlBakeOnePivot(string $node)
+{
+    if (`objExists ($node + ".mtlHasPivotFrame")`) {
+        if (`getAttr ($node + ".mtlHasPivotFrame")`) {
+            mtlBakeOnePivotFrame $node;
+            return;
+        }
+    }
+
+    float $localPivot[] = `getAttr ($node + ".rotatePivot")`;
+    float $worldPivot[] = `xform -query -worldSpace -rotatePivot $node`;
+
+    mtlMoveShapePointsForPivotBake $node $localPivot[0] $localPivot[1] $localPivot[2];
+
+    xform
+        -worldSpace
+        -translation
+        $worldPivot[0]
+        $worldPivot[1]
+        $worldPivot[2]
+        $node;
+
+    mtlSetAttr $node "rotatePivotX" 0;
+    mtlSetAttr $node "rotatePivotY" 0;
+    mtlSetAttr $node "rotatePivotZ" 0;
+
+    mtlSetAttr $node "scalePivotX" 0;
+    mtlSetAttr $node "scalePivotY" 0;
+    mtlSetAttr $node "scalePivotZ" 0;
+
+    mtlSetAttr $node "rotatePivotTranslateX" 0;
+    mtlSetAttr $node "rotatePivotTranslateY" 0;
+    mtlSetAttr $node "rotatePivotTranslateZ" 0;
+
+    mtlSetAttr $node "scalePivotTranslateX" 0;
+    mtlSetAttr $node "scalePivotTranslateY" 0;
+    mtlSetAttr $node "scalePivotTranslateZ" 0;
+
+    if (`objExists ($node + ".mtlHasPivotDirection")`) {
+        if (`getAttr ($node + ".mtlHasPivotDirection")`) {
+            float $targetRotX = `getAttr ($node + ".mtlPivotDirectionX")`;
+            float $targetRotY = `getAttr ($node + ".mtlPivotDirectionY")`;
+            float $targetRotZ = `getAttr ($node + ".mtlPivotDirectionZ")`;
+
+            mtlSetRotationKeepingShapeWorld $node $targetRotX $targetRotY $targetRotZ;
+            setAttr ($node + ".mtlHasPivotDirection") 0;
+        }
+    }
+}
+
+global proc string mtlGetTransformFromComponent(string $component)
+{
+    string $parts[];
+    tokenize $component "." $parts;
+
+    if (size($parts) == 0) {
+        return "";
+    }
+
+    string $node = $parts[0];
+
+    if (!`objExists $node`) {
+        return "";
+    }
+
+    if (`nodeType $node` == "transform") {
+        return $node;
+    }
+
+    string $parents[] = `listRelatives -parent -fullPath $node`;
+
+    if (size($parents) > 0) {
+        if (`nodeType $parents[0]` == "transform") {
+            return $parents[0];
+        }
+    }
+
+    return "";
+}
+
+global proc int mtlNormalizeVector(float $x, float $y, float $z, string $resultAttr)
+{
+    float $length = sqrt(($x * $x) + ($y * $y) + ($z * $z));
+
+    if ($length < 0.0001) {
+        return 0;
+    }
+
+    setAttr ($resultAttr + "X") ($x / $length);
+    setAttr ($resultAttr + "Y") ($y / $length);
+    setAttr ($resultAttr + "Z") ($z / $length);
+
+    return 1;
+}
+
+global proc int mtlGetComponentCenter(string $component, string $resultAttr)
+{
+    string $verts[] = `polyListComponentConversion -toVertex $component`;
+    string $expandedVerts[] = `filterExpand -selectionMask 31 $verts`;
+
+    if (size($expandedVerts) == 0) {
+        return 0;
+    }
+
+    float $centerX = 0;
+    float $centerY = 0;
+    float $centerZ = 0;
+    int $i;
+
+    for ($i = 0; $i < size($expandedVerts); $i++) {
+        float $pos[] = `pointPosition -world $expandedVerts[$i]`;
+        $centerX += $pos[0];
+        $centerY += $pos[1];
+        $centerZ += $pos[2];
+    }
+
+    $centerX = ($centerX / size($expandedVerts));
+    $centerY = ($centerY / size($expandedVerts));
+    $centerZ = ($centerZ / size($expandedVerts));
+
+    setAttr ($resultAttr + "X") $centerX;
+    setAttr ($resultAttr + "Y") $centerY;
+    setAttr ($resultAttr + "Z") $centerZ;
+
+    return 1;
+}
+
+global proc int mtlGetDirectionFromTwoComponents(string $componentA, string $componentB, string $resultAttr)
+{
+    string $target = `mtlGetTransformFromComponent $componentA`;
+
+    if ($target == "") {
+        return 0;
+    }
+
+    mtlEnsurePivotDirectionAttrs $target;
+
+    string $pointAttr = ($target + ".mtlPivotDirection");
+
+    if (!`mtlGetComponentCenter $componentA $pointAttr`) {
+        return 0;
+    }
+
+    float $pointAX = `getAttr ($target + ".mtlPivotDirectionX")`;
+    float $pointAY = `getAttr ($target + ".mtlPivotDirectionY")`;
+    float $pointAZ = `getAttr ($target + ".mtlPivotDirectionZ")`;
+
+    if (!`mtlGetComponentCenter $componentB $pointAttr`) {
+        return 0;
+    }
+
+    float $pointBX = `getAttr ($target + ".mtlPivotDirectionX")`;
+    float $pointBY = `getAttr ($target + ".mtlPivotDirectionY")`;
+    float $pointBZ = `getAttr ($target + ".mtlPivotDirectionZ")`;
+    float $dirX = ($pointBX - $pointAX);
+    float $dirY = ($pointBY - $pointAY);
+    float $dirZ = ($pointBZ - $pointAZ);
+
+    return `mtlNormalizeVector $dirX $dirY $dirZ $resultAttr`;
+}
+
+global proc int mtlGetRotationFromThreeComponents(string $componentBase, string $componentY, string $componentZ, string $resultAttr)
+{
+    string $target = `mtlGetTransformFromComponent $componentBase`;
+
+    if ($target == "") {
+        return 0;
+    }
+
+    mtlEnsurePivotDirectionAttrs $target;
+
+    string $pointAttr = ($target + ".mtlPivotDirection");
+
+    if (!`mtlGetComponentCenter $componentBase $pointAttr`) {
+        return 0;
+    }
+
+    float $baseX = `getAttr ($target + ".mtlPivotDirectionX")`;
+    float $baseY = `getAttr ($target + ".mtlPivotDirectionY")`;
+    float $baseZ = `getAttr ($target + ".mtlPivotDirectionZ")`;
+
+    if (!`mtlGetComponentCenter $componentY $pointAttr`) {
+        return 0;
+    }
+
+    float $yPointX = `getAttr ($target + ".mtlPivotDirectionX")`;
+    float $yPointY = `getAttr ($target + ".mtlPivotDirectionY")`;
+    float $yPointZ = `getAttr ($target + ".mtlPivotDirectionZ")`;
+
+    if (!`mtlGetComponentCenter $componentZ $pointAttr`) {
+        return 0;
+    }
+
+    float $zPointX = `getAttr ($target + ".mtlPivotDirectionX")`;
+    float $zPointY = `getAttr ($target + ".mtlPivotDirectionY")`;
+    float $zPointZ = `getAttr ($target + ".mtlPivotDirectionZ")`;
+
+    float $originX = (($baseX + $yPointX) * 0.5);
+    float $originY = (($baseY + $yPointY) * 0.5);
+    float $originZ = (($baseZ + $yPointZ) * 0.5);
+    float $yX = ($yPointX - $baseX);
+    float $yY = ($yPointY - $baseY);
+    float $yZ = ($yPointZ - $baseZ);
+    float $yLength = sqrt(($yX * $yX) + ($yY * $yY) + ($yZ * $yZ));
+
+    if ($yLength < 0.0001) {
+        return 0;
+    }
+
+    $yX = ($yX / $yLength);
+    $yY = ($yY / $yLength);
+    $yZ = ($yZ / $yLength);
+
+    float $originToZX = ($zPointX - $originX);
+    float $originToZY = ($zPointY - $originY);
+    float $originToZZ = ($zPointZ - $originZ);
+    float $zOnY = (($originToZX * $yX) + ($originToZY * $yY) + ($originToZZ * $yZ));
+    float $closestX = ($originX + ($zOnY * $yX));
+    float $closestY = ($originY + ($zOnY * $yY));
+    float $closestZ = ($originZ + ($zOnY * $yZ));
+    float $zTempX = ($zPointX - $closestX);
+    float $zTempY = ($zPointY - $closestY);
+    float $zTempZ = ($zPointZ - $closestZ);
+    float $zTempLength = sqrt(($zTempX * $zTempX) + ($zTempY * $zTempY) + ($zTempZ * $zTempZ));
+
+    if ($zTempLength < 0.0001) {
+        warning("The third component is too close to the Y axis line.");
+        return 0;
+    }
+
+    $zTempX = ($zTempX / $zTempLength);
+    $zTempY = ($zTempY / $zTempLength);
+    $zTempZ = ($zTempZ / $zTempLength);
+
+    float $xX = (($yY * $zTempZ) - ($yZ * $zTempY));
+    float $xY = (($yZ * $zTempX) - ($yX * $zTempZ));
+    float $xZ = (($yX * $zTempY) - ($yY * $zTempX));
+    float $xLength = sqrt(($xX * $xX) + ($xY * $xY) + ($xZ * $xZ));
+
+    if ($xLength < 0.0001) {
+        warning("The Y and Z direction components are too close to parallel.");
+        return 0;
+    }
+
+    $xX = ($xX / $xLength);
+    $xY = ($xY / $xLength);
+    $xZ = ($xZ / $xLength);
+
+    float $zX = (($xY * $yZ) - ($xZ * $yY));
+    float $zY = (($xZ * $yX) - ($xX * $yZ));
+    float $zZ = (($xX * $yY) - ($xY * $yX));
+    float $zLength = sqrt(($zX * $zX) + ($zY * $zY) + ($zZ * $zZ));
+
+    if ($zLength < 0.0001) {
+        return 0;
+    }
+
+    $zX = ($zX / $zLength);
+    $zY = ($zY / $zLength);
+    $zZ = ($zZ / $zLength);
+
+    setAttr ($target + ".mtlHasPivotFrame") 1;
+    setAttr ($target + ".mtlPivotBaseX") $originX;
+    setAttr ($target + ".mtlPivotBaseY") $originY;
+    setAttr ($target + ".mtlPivotBaseZ") $originZ;
+    setAttr ($target + ".mtlPivotAxisXX") $xX;
+    setAttr ($target + ".mtlPivotAxisXY") $xY;
+    setAttr ($target + ".mtlPivotAxisXZ") $xZ;
+    setAttr ($target + ".mtlPivotAxisYX") $yX;
+    setAttr ($target + ".mtlPivotAxisYY") $yY;
+    setAttr ($target + ".mtlPivotAxisYZ") $yZ;
+    setAttr ($target + ".mtlPivotAxisZX") $zX;
+    setAttr ($target + ".mtlPivotAxisZY") $zY;
+    setAttr ($target + ".mtlPivotAxisZZ") $zZ;
+
+    string $tmp = `createNode transform -name "mtl_tmpPivotOrientation#"`;
+
+    xform
+        -worldSpace
+        -matrix
+        $xX $yX $zX 0
+        $xY $yY $zY 0
+        $xZ $yZ $zZ 0
+        0 0 0 1
+        $tmp;
+
+    float $rot[] = `xform -query -worldSpace -rotation $tmp`;
+    delete $tmp;
+
+    setAttr ($resultAttr + "X") $rot[0];
+    setAttr ($resultAttr + "Y") $rot[1];
+    setAttr ($resultAttr + "Z") $rot[2];
+
+    return 1;
+}
+
+global proc int mtlGetDirectionFromSelectedComponent(string $resultAttr)
+{
+    string $selection[] = `ls -orderedSelection -flatten -long`;
+
+    if (size($selection) == 0) {
+        $selection = `ls -sl -flatten -long`;
+    }
+
+    if (size($selection) >= 3) {
+        int $threePointOk = `mtlGetRotationFromThreeComponents $selection[0] $selection[1] $selection[2] $resultAttr`;
+
+        if ($threePointOk) {
+            return 2;
+        }
+
+        warning("Could not read orientation from the first three selected components. Falling back to two-component direction.");
+    }
+
+    if (size($selection) >= 2) {
+        int $twoPointOk = `mtlGetDirectionFromTwoComponents $selection[0] $selection[1] $resultAttr`;
+
+        if ($twoPointOk) {
+            return 1;
+        }
+
+        warning("Could not read direction from the first two selected components. Falling back to single-component direction.");
+    }
+
+    string $faces[] = `filterExpand -selectionMask 34`;
+    string $edges[] = `filterExpand -selectionMask 32`;
+    string $verts[] = `filterExpand -selectionMask 31`;
+
+    if (size($faces) > 0) {
+        string $info[] = `polyInfo -faceNormals $faces[0]`;
+        string $tokens[];
+        tokenize $info[0] " " $tokens;
+
+        if (size($tokens) >= 5) {
+            float $faceX = $tokens[size($tokens) - 3];
+            float $faceY = $tokens[size($tokens) - 2];
+            float $faceZ = $tokens[size($tokens) - 1];
+            int $faceOk = `mtlNormalizeVector $faceX $faceY $faceZ $resultAttr`;
+            return $faceOk;
+        }
+    }
+
+    if (size($edges) > 0) {
+        string $edgeVerts[] = `polyListComponentConversion -fromEdge -toVertex $edges[0]`;
+        string $expandedVerts[] = `filterExpand -selectionMask 31 $edgeVerts`;
+
+        if (size($expandedVerts) >= 2) {
+            float $p0[] = `pointPosition -world $expandedVerts[0]`;
+            float $p1[] = `pointPosition -world $expandedVerts[1]`;
+            float $edgeX = ($p1[0] - $p0[0]);
+            float $edgeY = ($p1[1] - $p0[1]);
+            float $edgeZ = ($p1[2] - $p0[2]);
+
+            int $edgeOk = `mtlNormalizeVector $edgeX $edgeY $edgeZ $resultAttr`;
+            return $edgeOk;
+        }
+    }
+
+    if (size($verts) > 0) {
+        float $normalValues[] = `polyNormalPerVertex -query -xyz $verts[0]`;
+
+        if (size($normalValues) >= 3) {
+            float $vertexX = 0;
+            float $vertexY = 0;
+            float $vertexZ = 0;
+            int $i;
+            int $count = 0;
+
+            for ($i = 0; $i < size($normalValues); $i += 3) {
+                $vertexX += $normalValues[$i];
+                $vertexY += $normalValues[$i + 1];
+                $vertexZ += $normalValues[$i + 2];
+                $count++;
+            }
+
+            if ($count > 0) {
+                float $avgX = ($vertexX / $count);
+                float $avgY = ($vertexY / $count);
+                float $avgZ = ($vertexZ / $count);
+                int $vertexOk = `mtlNormalizeVector $avgX $avgY $avgZ $resultAttr`;
+                return $vertexOk;
+            }
+        }
+    }
+
+    return 0;
+}
+
+global proc mtlSetPivotDirectionFromComponent()
+{
+    string $selection[] = `ls -orderedSelection -flatten -long`;
+
+    if (size($selection) == 0) {
+        $selection = `ls -sl -flatten -long`;
+    }
+
+    if (size($selection) == 0) {
+        warning("Select a polygon vertex, edge, or face.");
+        return;
+    }
+
+    string $target = `mtlGetTransformFromComponent $selection[0]`;
+
+    if ($target == "") {
+        warning("Could not find a transform from the selected component.");
+        return;
+    }
+
+    mtlEnsurePivotDirectionAttrs $target;
+
+    select -replace $selection;
+
+    string $directionAttr = ($target + ".mtlPivotDirection");
+
+    int $directionMode = `mtlGetDirectionFromSelectedComponent $directionAttr`;
+
+    if (!$directionMode) {
+        warning("Could not read direction from the selected component.");
+        return;
+    }
+
+    float $dirX = `getAttr ($target + ".mtlPivotDirectionX")`;
+    float $dirY = `getAttr ($target + ".mtlPivotDirectionY")`;
+    float $dirZ = `getAttr ($target + ".mtlPivotDirectionZ")`;
+    float $newRot[];
+
+    if ($directionMode == 2) {
+        $newRot[0] = $dirX;
+        $newRot[1] = $dirY;
+        $newRot[2] = $dirZ;
+    } else {
+        float $angleRot[] = `angleBetween -euler -vector1 0 1 0 -vector2 $dirX $dirY $dirZ`;
+        $newRot[0] = $angleRot[0];
+        $newRot[1] = $angleRot[1];
+        $newRot[2] = $angleRot[2];
+    }
+
+    undoInfo -openChunk;
+
+    if ($directionMode != 2) {
+        setAttr ($target + ".mtlHasPivotFrame") 0;
+    }
+
+    setAttr ($target + ".mtlHasPivotDirection") 1;
+    setAttr ($target + ".mtlPivotDirectionX") $newRot[0];
+    setAttr ($target + ".mtlPivotDirectionY") $newRot[1];
+    setAttr ($target + ".mtlPivotDirectionZ") $newRot[2];
+
+    mtlBakeOnePivot $target;
+
+    select -replace $selection;
+
+    undoInfo -closeChunk;
+
+    select -replace $selection;
+
+    print("Set pivot direction and baked it to transform channels.\n");
+}
+
+global proc mtlCenterSelectedPivot()
+{
+    string $selection[] = `ls -sl -long`;
+    string $targets[];
+    int $i;
+
+    for ($i = 0; $i < size($selection); $i++) {
+        string $node = $selection[$i];
+        string $target = "";
+
+        if (`nodeType $node` == "transform") {
+            $target = $node;
+        } else {
+            string $parents[] = `listRelatives -parent -fullPath $node`;
+
+            if (size($parents) > 0) {
+                if (`nodeType $parents[0]` == "transform") {
+                    $target = $parents[0];
+                }
+            }
+        }
+
+        if ($target != "") {
+            if (!`mtlArrayHasItem $targets $target`) {
+                $targets[size($targets)] = $target;
+            }
+        }
+    }
+
+    if (size($targets) == 0) {
+        warning("No transform nodes selected.");
+        return;
+    }
+
+    undoInfo -openChunk;
+
+    for ($i = 0; $i < size($targets); $i++) {
+        xform -centerPivots $targets[$i];
+    }
+
+    undoInfo -closeChunk;
+
+    print("Centered pivot on " + size($targets) + " node(s).\n");
+}
+
+global proc mtlBakeSelectedPivot()
+{
+    string $selection[] = `ls -sl -long`;
+    string $targets[];
+    int $i;
+
+    for ($i = 0; $i < size($selection); $i++) {
+        string $node = $selection[$i];
+        string $target = "";
+
+        if (`nodeType $node` == "transform") {
+            $target = $node;
+        } else {
+            string $parents[] = `listRelatives -parent -fullPath $node`;
+
+            if (size($parents) > 0) {
+                if (`nodeType $parents[0]` == "transform") {
+                    $target = $parents[0];
+                }
+            }
+        }
+
+        if ($target != "") {
+            if (!`mtlArrayHasItem $targets $target`) {
+                $targets[size($targets)] = $target;
+            }
+        }
+    }
+
+    if (size($targets) == 0) {
+        warning("No transform nodes selected.");
+        return;
+    }
+
+    undoInfo -openChunk;
+
+    for ($i = 0; $i < size($targets); $i++) {
+        mtlBakeOnePivot $targets[$i];
+    }
+
+    undoInfo -closeChunk;
+
+    print("Baked pivot on " + size($targets) + " node(s).\n");
+}
+
+global proc mtlCenterThenBakeSelectedPivot()
+{
+    mtlCenterSelectedPivot;
+    mtlBakeSelectedPivot;
+}
+
+global proc mtlDeleteSelectedHistory()
+{
+    string $selection[] = `ls -sl -long`;
+    string $targets[];
+    int $i;
+
+    for ($i = 0; $i < size($selection); $i++) {
+        string $node = $selection[$i];
+        string $target = "";
+
+        if (`nodeType $node` == "transform") {
+            $target = $node;
+        } else {
+            string $parents[] = `listRelatives -parent -fullPath $node`;
+
+            if (size($parents) > 0) {
+                if (`nodeType $parents[0]` == "transform") {
+                    $target = $parents[0];
+                }
+            }
+        }
+
+        if ($target != "") {
+            if (!`mtlArrayHasItem $targets $target`) {
+                $targets[size($targets)] = $target;
+            }
+        }
+    }
+
+    if (size($targets) == 0) {
+        warning("No transform nodes selected.");
+        return;
+    }
+
+    undoInfo -openChunk;
+
+    for ($i = 0; $i < size($targets); $i++) {
+        delete -ch $targets[$i];
+    }
+
+    undoInfo -closeChunk;
+
+    print("Deleted all history on " + size($targets) + " node(s).\n");
+}
+
+global proc mtlDeleteSelectedNonDeformerHistory()
+{
+    string $selection[] = `ls -sl -long`;
+    string $targets[];
+    int $i;
+
+    for ($i = 0; $i < size($selection); $i++) {
+        string $node = $selection[$i];
+        string $target = "";
+
+        if (`nodeType $node` == "transform") {
+            $target = $node;
+        } else {
+            string $parents[] = `listRelatives -parent -fullPath $node`;
+
+            if (size($parents) > 0) {
+                if (`nodeType $parents[0]` == "transform") {
+                    $target = $parents[0];
+                }
+            }
+        }
+
+        if ($target != "") {
+            if (!`mtlArrayHasItem $targets $target`) {
+                $targets[size($targets)] = $target;
+            }
+        }
+    }
+
+    if (size($targets) == 0) {
+        warning("No transform nodes selected.");
+        return;
+    }
+
+    undoInfo -openChunk;
+
+    for ($i = 0; $i < size($targets); $i++) {
+        bakePartialHistory -prePostDeformers $targets[$i];
+    }
+
+    undoInfo -closeChunk;
+
+    print("Deleted non-deformer history on " + size($targets) + " node(s).\n");
+}
+
+global proc mtlDeleteSelectedIntermediateObjects()
+{
+    string $selection[] = `ls -sl -long`;
+    string $targets[];
+    string $deleteShapes[];
+    int $i;
+
+    for ($i = 0; $i < size($selection); $i++) {
+        string $node = $selection[$i];
+        string $target = "";
+
+        if (`nodeType $node` == "transform") {
+            $target = $node;
+        } else {
+            string $parents[] = `listRelatives -parent -fullPath $node`;
+
+            if (size($parents) > 0) {
+                if (`nodeType $parents[0]` == "transform") {
+                    $target = $parents[0];
+                }
+            }
+        }
+
+        if ($target != "") {
+            if (!`mtlArrayHasItem $targets $target`) {
+                $targets[size($targets)] = $target;
+            }
+        }
+    }
+
+    if (size($targets) == 0) {
+        warning("No transform nodes selected.");
+        return;
+    }
+
+    for ($i = 0; $i < size($targets); $i++) {
+        string $shapes[] = `listRelatives -shapes -fullPath $targets[$i]`;
+        int $j;
+
+        for ($j = 0; $j < size($shapes); $j++) {
+            string $shape = $shapes[$j];
+
+            if (`objExists ($shape + ".intermediateObject")`) {
+                if (`getAttr ($shape + ".intermediateObject")`) {
+                    if (!`mtlArrayHasItem $deleteShapes $shape`) {
+                        $deleteShapes[size($deleteShapes)] = $shape;
+                    }
+                }
+            }
+        }
+    }
+
+    if (size($deleteShapes) == 0) {
+        warning("No intermediate objects found on selected nodes.");
+        return;
+    }
+
+    undoInfo -openChunk;
+    delete $deleteShapes;
+    undoInfo -closeChunk;
+
+    print("Deleted " + size($deleteShapes) + " intermediate object(s).\n");
+}
+
+global proc mtlRunSelectedCleanup(int $doCleanup)
+{
+    string $code = "";
+    $code += "import maya.cmds as cmds\\n";
+    $code += "import re\\n";
+    $code += "def uniq(items):\\n";
+    $code += "    out=[]\\n";
+    $code += "    for item in items:\\n";
+    $code += "        if item and item not in out:\\n";
+    $code += "            out.append(item)\\n";
+    $code += "    return out\\n";
+    $code += "def targets():\\n";
+    $code += "    sel=cmds.ls(sl=True,l=True) or []\\n";
+    $code += "    out=[]\\n";
+    $code += "    for node in sel:\\n";
+    $code += "        target=None\\n";
+    $code += "        if cmds.objExists(node) and cmds.nodeType(node)=='transform':\\n";
+    $code += "            target=node\\n";
+    $code += "        else:\\n";
+    $code += "            parents=cmds.listRelatives(node,p=True,f=True) or []\\n";
+    $code += "            if parents and cmds.nodeType(parents[0])=='transform':\\n";
+    $code += "                target=parents[0]\\n";
+    $code += "        if target and target not in out:\\n";
+    $code += "            out.append(target)\\n";
+    $code += "    return out\\n";
+    $code += "def mesh_shapes(target):\\n";
+    $code += "    shapes=cmds.listRelatives(target,s=True,f=True) or []\\n";
+    $code += "    out=[]\\n";
+    $code += "    for shape in shapes:\\n";
+    $code += "        if cmds.nodeType(shape)=='mesh' and cmds.objExists(shape+'.intermediateObject') and not cmds.getAttr(shape+'.intermediateObject'):\\n";
+    $code += "            out.append(shape)\\n";
+    $code += "    return out\\n";
+    $code += "def face_vertex_count(face):\\n";
+    $code += "    verts=cmds.polyListComponentConversion(face,ff=True,tv=True) or []\\n";
+    $code += "    verts=cmds.filterExpand(verts,sm=31) or []\\n";
+    $code += "    return len(verts)\\n";
+    $code += "def info_components(lines, suffix):\\n";
+    $code += "    found=[]\\n";
+    $code += "    pattern=r'\\\\S+\\\\.'+suffix+r'\\\\[\\\\d+\\\\]'\\n";
+    $code += "    for line in lines or []:\\n";
+    $code += "        found += re.findall(pattern,line)\\n";
+    $code += "    return found\\n";
+    $code += "def collect():\\n";
+    $code += "    ngons=[]; lamina_all=[]; lamina_delete=[]; nonmanifold=[]; split_vertices=[]\\n";
+    $code += "    for target in targets():\\n";
+    $code += "        for shape in mesh_shapes(target):\\n";
+    $code += "            for face in cmds.ls(shape+'.f[*]',fl=True) or []:\\n";
+    $code += "                if face_vertex_count(face)>=5:\\n";
+    $code += "                    ngons.append(face)\\n";
+    $code += "            for line in cmds.polyInfo(shape,laminaFaces=True) or []:\\n";
+    $code += "                faces=re.findall(r'\\\\S+\\\\.f\\\\[\\\\d+\\\\]',line)\\n";
+    $code += "                lamina_all += faces\\n";
+    $code += "                if len(faces)>1:\\n";
+    $code += "                    lamina_delete += faces[1:]\\n";
+    $code += "                else:\\n";
+    $code += "                    lamina_delete += faces\\n";
+    $code += "            nm_edges=info_components(cmds.polyInfo(shape,nonManifoldEdges=True),'e')\\n";
+    $code += "            nm_verts=info_components(cmds.polyInfo(shape,nonManifoldVertices=True),'vtx')\\n";
+    $code += "            nonmanifold += nm_edges + nm_verts\\n";
+    $code += "            edge_verts=cmds.polyListComponentConversion(nm_edges,fe=True,tv=True) if nm_edges else []\\n";
+    $code += "            edge_verts=cmds.filterExpand(edge_verts,sm=31) or []\\n";
+    $code += "            split_vertices += nm_verts + edge_verts\\n";
+    $code += "    return uniq(ngons), uniq(lamina_all), uniq(lamina_delete), uniq(nonmanifold), uniq(split_vertices)\\n";
+    $code += "ngons, lamina_all, lamina_delete, nonmanifold, split_vertices = collect()\\n";
+    if ($doCleanup) {
+        $code += "if True:\\n";
+    } else {
+        $code += "if False:\\n";
+    }
+    $code += "    if ngons:\\n";
+    $code += "        cmds.polyTriangulate(ngons,ch=False)\\n";
+    $code += "    if lamina_delete:\\n";
+    $code += "        cmds.delete(lamina_delete)\\n";
+    $code += "    if split_vertices:\\n";
+    $code += "        cmds.polySplitVertex(split_vertices,ch=False)\\n";
+    $code += "    title='Cleanup Result'\\n";
+    $code += "else:\\n";
+    $code += "    select_items=uniq(ngons+lamina_all+nonmanifold)\\n";
+    $code += "    if select_items:\\n";
+    $code += "        cmds.select(select_items,r=True)\\n";
+    $code += "    title='Cleanup Target Components'\\n";
+    $code += "message='5+ sided faces: {0}\\\\nLamina faces: {1}\\\\nNon-manifold components: {2}'.format(len(ngons),len(lamina_all),len(nonmanifold))\\n";
+    $code += "cmds.confirmDialog(title=title,message=message,button=['OK'],defaultButton='OK')\\n";
+    python("exec(\"" + $code + "\")");
+}
+
+global proc mtlCleanupSelectedModels()
+{
+    mtlRunSelectedCleanup 1;
+}
+
+global proc mtlSelectCleanupComponents()
+{
+    mtlRunSelectedCleanup 0;
+}
+
+global proc showMayaToolList()
+{
+    string $windowName = "mayaToolListWindow";
+
+    selectPref -trackSelectionOrder true;
+
+    if (`window -exists $windowName`) {
+        deleteUI $windowName;
+    }
+
+    window
+        -title "Maya Tool List"
+        -widthHeight 520 455
+        -sizeable true
+        $windowName;
+
+    columnLayout
+        -adjustableColumn true
+        -rowSpacing 8
+        -columnAttach "both" 8;
+
+    text
+        -align "left"
+        -label "Tool List";
+
+    separator -height 8 -style "in";
+
+    text
+        -align "left"
+        -label "Transform";
+
+    rowLayout
+        -numberOfColumns 4
+        -columnWidth4 260 72 72 72
+        -columnAttach4 "left" "left" "left" "left"
+        -columnAlign4 "left" "left" "left" "left"
+        -adjustableColumn 1;
+
+    text
+        -align "left"
+        -label "Transform Reset and Freeze";
+
+    button
+        -height 32
+        -label "Reset"
+        -annotation "Reset translate, rotate, scale, shear, and pivots on selected transform nodes."
+        -command "mtlResetSelectedTransform;";
+
+    button
+        -height 32
+        -label "Freeze"
+        -annotation "Freeze translate, rotate, and scale on selected transform nodes."
+        -command "mtlFreezeSelectedTransform;";
+
+    button
+        -height 32
+        -label "F + R"
+        -annotation "Freeze selected transform nodes, then reset transform channels and pivots."
+        -command "mtlFreezeThenResetSelectedTransform;";
+
+    setParent ..;
+
+    separator -height 8 -style "in";
+
+    text
+        -align "left"
+        -label "Pivot";
+
+    rowLayout
+        -numberOfColumns 4
+        -columnWidth4 260 72 72 72
+        -columnAttach4 "left" "left" "left" "left"
+        -columnAlign4 "left" "left" "left" "left"
+        -adjustableColumn 1;
+
+    text
+        -align "left"
+        -label "Center Pivot and Bake";
+
+    button
+        -height 32
+        -label "Center"
+        -annotation "Move selected transform pivots to the center."
+        -command "mtlCenterSelectedPivot;";
+
+    button
+        -height 32
+        -label "Bake"
+        -annotation "Bake selected transform pivots."
+        -command "mtlBakeSelectedPivot;";
+
+    button
+        -height 32
+        -label "C + B"
+        -annotation "Center selected transform pivots, then bake them."
+        -command "mtlCenterThenBakeSelectedPivot;";
+
+    setParent ..;
+
+    rowLayout
+        -numberOfColumns 2
+        -columnWidth2 260 72
+        -columnAttach2 "left" "left"
+        -columnAlign2 "left" "left"
+        -adjustableColumn 1;
+
+    text
+        -align "left"
+        -label "Pivot Direction";
+
+    button
+        -height 32
+        -label "Set"
+        -annotation "Set pivot direction from the selected vertex, edge, or face."
+        -command "mtlSetPivotDirectionFromComponent;";
+
+    setParent ..;
+
+    separator -height 8 -style "in";
+
+    text
+        -align "left"
+        -label "History";
+
+    rowLayout
+        -numberOfColumns 3
+        -columnWidth3 260 72 72
+        -columnAttach3 "left" "left" "left"
+        -columnAlign3 "left" "left" "left"
+        -adjustableColumn 1;
+
+    text
+        -align "left"
+        -label "Delete History";
+
+    button
+        -height 32
+        -label "All"
+        -annotation "Delete all construction history on selected transform nodes."
+        -command "mtlDeleteSelectedHistory;";
+
+    button
+        -height 32
+        -label "NonDef"
+        -annotation "Delete non-deformer history while preserving deformer history on selected transform nodes."
+        -command "mtlDeleteSelectedNonDeformerHistory;";
+
+    setParent ..;
+
+    rowLayout
+        -numberOfColumns 2
+        -columnWidth2 260 72
+        -columnAttach2 "left" "left"
+        -columnAlign2 "left" "left"
+        -adjustableColumn 1;
+
+    text
+        -align "left"
+        -label "Delete Intermediate Objects";
+
+    button
+        -height 32
+        -label "Delete"
+        -annotation "Delete intermediate shape objects under selected transform nodes."
+        -command "mtlDeleteSelectedIntermediateObjects;";
+
+    setParent ..;
+
+    separator -height 8 -style "in";
+
+    text
+        -align "left"
+        -label "Mesh";
+
+    rowLayout
+        -numberOfColumns 3
+        -columnWidth3 260 72 72
+        -columnAttach3 "left" "left" "left"
+        -columnAlign3 "left" "left" "left"
+        -adjustableColumn 1;
+
+    text
+        -align "left"
+        -label "Cleanup";
+
+    button
+        -height 32
+        -label "Cleanup"
+        -annotation "Cleanup 5+ sided faces, lamina faces, and non-manifold geometry."
+        -command "mtlCleanupSelectedModels;";
+
+    button
+        -height 32
+        -label "Select"
+        -annotation "Select components that would be affected by cleanup without modifying geometry."
+        -command "mtlSelectCleanupComponents;";
+
+    setParent ..;
+
+    showWindow $windowName;
+}
+
+showMayaToolList;
